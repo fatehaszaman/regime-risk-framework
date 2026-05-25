@@ -2,7 +2,7 @@
 
 A Python framework for modeling non-market regime risk in import-dependent businesses operating in emerging market currency and policy environments.
 
-Standard risk tools model market risk: vol spikes, correlation breakdowns, fat tails. This framework models a different problem -- what happens when the structural rules change. Currency controls, LC rationing, tariff circulars, and political discontinuities don't show up in price history until it's too late. This framework makes them first-class risk inputs.
+Standard risk tools model market risk: vol spikes, correlation breakdowns, fat tails. This framework models a different problem: what happens when the structural rules change. Currency controls, LC rationing, tariff circulars, and political discontinuities don't show up in price history until it's too late. This framework makes them first-class risk inputs.
 
 ## The Problem
 
