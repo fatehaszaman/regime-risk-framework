@@ -1,0 +1,13 @@
+# Scoped deliberately. E/F catch real defects (unused imports and variables,
+# undefined names, f-strings with no placeholders); I keeps imports ordered.
+# Opinionated modernisation rules such as UP are left off: rewriting working
+# Optional[X] annotations to X | None is churn, not a fix.
+target-version = "py310"
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "RUF"]
+
+# En-dashes and similar are used deliberately in the domain docstrings
+# (score ranges like "0–10"), not typos.
+ignore = ["RUF002", "RUF003"]
