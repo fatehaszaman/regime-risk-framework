@@ -12,10 +12,13 @@ import numpy as np
 import pandas as pd
 
 from regime_risk import (
-    EffectiveFXCurveBuilder, LCSettlement,
+    EffectiveFXCurveBuilder,
+    LCPriorityAllocator,
+    LCSettlement,
+    PendingLC,
+    Position,
     RegimeClassifier,
-    ScenarioEngine, Position, DEFAULT_SCENARIOS,
-    LCPriorityAllocator, PendingLC,
+    ScenarioEngine,
 )
 
 np.random.seed(42)

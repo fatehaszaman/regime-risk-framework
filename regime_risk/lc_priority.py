@@ -18,10 +18,10 @@ and which to cancel, along with the reasoning for each decision.
 
 from __future__ import annotations
 
-import pandas as pd
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+
+import pandas as pd
 
 
 class LCStatus(str, Enum):

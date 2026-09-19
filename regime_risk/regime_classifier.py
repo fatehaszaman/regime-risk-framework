@@ -21,11 +21,12 @@ producing a regime label and a confidence score at each timestep.
 
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import ClassVar, Optional
+
+import numpy as np
+import pandas as pd
 
 
 class RegimeLabel(str, Enum):
@@ -79,14 +80,14 @@ class RegimeClassifier:
         Events within ±3 trading days of a date trigger the policy signal.
     """
 
-    SIGNAL_WEIGHTS = {
+    SIGNAL_WEIGHTS: ClassVar[dict[str, float]] = {
         "fx_basis": 0.35,
         "lc_utilization": 0.30,
         "volatility": 0.15,
         "policy_event": 0.20,
     }
 
-    THRESHOLDS = [
+    THRESHOLDS: ClassVar[list[tuple[float, RegimeLabel]]] = [
         (0.70, RegimeLabel.CRISIS),
         (0.45, RegimeLabel.STRESSED),
         (0.20, RegimeLabel.ELEVATED),
