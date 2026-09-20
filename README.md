@@ -1,5 +1,7 @@
 # Regime Risk Framework
 
+[Algorithm guide: pseudocode, time complexity, and memory](docs/ALGORITHM_GUIDE.md).
+
 [![Python CI](https://github.com/fatehaszaman/regime-risk-framework/actions/workflows/python-ci.yml/badge.svg)](https://github.com/fatehaszaman/regime-risk-framework/actions/workflows/python-ci.yml)
 
 A Python framework for modeling non-market regime risk in import-dependent businesses operating in emerging market currency and policy environments.
