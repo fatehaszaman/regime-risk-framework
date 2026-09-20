@@ -28,11 +28,11 @@ Constructs an effective FX curve from realized LC settlement data rather than of
 - Rolling smoothing with adjustable window
 - Regime flagging when basis exceeds a stress threshold
 
-The smoothing and the basis calculation currently interact badly: the effective
-rate is smoothed and then differenced against the unsmoothed official rate,
-which turns a trend in the level into a basis that is not there. This is the
-first entry in [KNOWN_ISSUES.md](KNOWN_ISSUES.md) and it matters, because the
-basis is the largest-weighted input to the classifier below.
+The builder calculates the realized-versus-official basis first and smooths
+that dislocation rather than the FX level. A shared trend in official and
+realized rates therefore remains a zero basis instead of producing a false
+stress signal. The separate row-versus-calendar-day window limitation remains
+documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md) #2.
 
 ### `regime_classifier.py` -- Regime Classifier
 
@@ -115,18 +115,17 @@ whatever the code currently returns: expected values are derived from the
 formulas in the class docstrings and from series whose correct answer is known by
 construction.
 
-The sharpest examples are the ones built on inputs with a known-zero answer. To
-test the FX curve, realized settlement rates are set exactly equal to the
-official rate on every date, so the true basis is identically zero and anything
-the builder reports is its own artefact. That test is how issue #1 was found.
+The sharpest examples are built on inputs with a known-zero answer. For the FX
+curve, realized settlement rates are set exactly equal to the official rate on
+every date while both trend. The regression tests require a zero basis and no
+stress flags throughout.
 
-Writing the suite surfaced 16 defects, recorded in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md) with severity and a proposed fix. Two change
-conclusions rather than just outputs:
+Writing the suite surfaced 16 defects. Issue #1 is fixed and protected by
+regression tests; the remaining 15 are recorded in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md) with severity and a proposed fix. The most
+important remaining temporal-integrity issue changes conclusions rather than
+just outputs:
 
-- The curve builder manufactures an FX basis out of a pure trend in the official
-  rate, and at a realistic trend it falsely flags most days as a stressed
-  regime on a series containing no dislocation at all.
 - The regime label on a date depends on volatility observed after that date, so
   it cannot be computed in real time. A consequence worth knowing separately:
   because the z-score is full-sample, the largest value attainable over `n`
@@ -138,12 +137,12 @@ Three more are cases of a documented field that is never read —
 that silently does nothing: `min_priority_threshold` is only checked after
 capacity runs out, so an LC scoring below it is approved whenever there is room.
 
-Tests that assert a defect say so in the docstring and cite the issue number.
-They pass by pinning current behaviour, so fixing a bug breaks its test, which is
-the signal to delete both.
+Tests that assert an unresolved defect say so in the docstring and cite the
+issue number. When a bug is fixed, the pinning test is replaced with a
+regression test for the corrected result.
 
-Nothing is fixed yet. The issues are recorded first so the published behaviour is
-documented, and so a fix and its description land together.
+Issue #1 and its documentation were corrected together; the remaining issues
+stay explicit until their fixes and regression tests land.
 
 ## Requirements
 
@@ -172,7 +171,7 @@ This is a clear implementation of a set of ideas about non-market risk, built to
 be read and argued with. It is not a production risk system: there is no data
 ingestion, no persistence, no position source of truth, and the calibrations in
 `DEFAULT_SCENARIOS` are illustrative rather than estimated from a specific
-market. The two high-severity issues above should be fixed before any of its
+market. The remaining high-severity issues should be fixed before any of its
 output is used to support a decision.
 
 ## License

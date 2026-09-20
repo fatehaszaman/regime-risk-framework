@@ -52,7 +52,7 @@ class EffectiveFXCurve:
     official_rates : np.ndarray
         Central bank official LCY/USD rates.
     effective_rates : np.ndarray
-        Volume-weighted realized settlement rates.
+        Official rates plus the smoothed effective-versus-official basis.
     basis : np.ndarray
         Spread between effective and official rates (effective - official).
     regime_flags : np.ndarray
@@ -76,7 +76,8 @@ class EffectiveFXCurveBuilder:
         Basis (in LCY per USD) above which a date is flagged as stressed.
         Default 2.0 — calibrate to the specific currency pair in use.
     smoothing_window : int
-        Rolling window (in days) for smoothing the effective rate.
+        Rolling observation window for smoothing the effective-versus-official
+        basis.
         Default 5 trading days.
     min_observations : int
         Minimum LC settlements required to compute a reliable rate on a date.
@@ -100,6 +101,8 @@ class EffectiveFXCurveBuilder:
         The effective rate on each date is the volume-weighted average
         realized settlement rate across all LCs settling that day.
         On dates with fewer than min_observations, falls back to official rate.
+        The returned curve smooths the effective-versus-official basis and
+        reconstructs its effective rate at the current official level.
 
         Parameters
         ----------
@@ -138,14 +141,16 @@ class EffectiveFXCurveBuilder:
             grouped["official_rate"],
         )
 
-        # Smooth effective rate
-        grouped["effective_rate"] = (
-            grouped["effective_rate"]
+        # Smooth the dislocation rather than the FX level. Smoothing the
+        # effective rate before subtracting the current official rate would
+        # turn an ordinary trend in both series into a spurious basis.
+        grouped["basis"] = grouped["effective_rate"] - grouped["official_rate"]
+        grouped["basis"] = (
+            grouped["basis"]
             .rolling(self.smoothing_window, min_periods=1)
             .mean()
         )
-
-        grouped["basis"] = grouped["effective_rate"] - grouped["official_rate"]
+        grouped["effective_rate"] = grouped["official_rate"] + grouped["basis"]
         grouped["regime_flag"] = grouped["basis"] > self.stress_basis_threshold
 
         return EffectiveFXCurve(
