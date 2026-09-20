@@ -75,6 +75,12 @@ class RegimeClassifier:
         LC utilization rate (0–1) above which LC signal fires. Default 0.85.
     vol_zscore_threshold : float
         Z-score of realized vol above which vol signal fires. Default 2.0.
+    vol_lookback : int
+        Maximum number of prior observations used to estimate the volatility
+        baseline. Default 20.
+    vol_min_observations : int
+        Prior observations required before the volatility signal can fire.
+        Default 20.
     policy_event_dates : list[str]
         Known dates of policy discontinuities (e.g. new circulars, regime change).
         Events within ±3 trading days of a date trigger the policy signal.
@@ -99,11 +105,20 @@ class RegimeClassifier:
         fx_basis_threshold: float = 2.0,
         lc_utilization_threshold: float = 0.85,
         vol_zscore_threshold: float = 2.0,
+        vol_lookback: int = 20,
+        vol_min_observations: int = 20,
         policy_event_dates: Optional[list[str]] = None,
     ):
+        if vol_lookback < 1:
+            raise ValueError("vol_lookback must be positive")
+        if not 1 <= vol_min_observations <= vol_lookback:
+            raise ValueError("vol_min_observations must be between 1 and vol_lookback")
+
         self.fx_basis_threshold = fx_basis_threshold
         self.lc_utilization_threshold = lc_utilization_threshold
         self.vol_zscore_threshold = vol_zscore_threshold
+        self.vol_lookback = vol_lookback
+        self.vol_min_observations = vol_min_observations
         self.policy_event_dates = pd.to_datetime(policy_event_dates or [])
 
     def _score(self, fx_b: bool, lc_u: bool, vol: bool, policy: bool) -> float:
@@ -151,9 +166,20 @@ class RegimeClassifier:
         -------
         list[RegimeSignal]
         """
-        vol_mean = np.mean(realized_vol)
-        vol_std = np.std(realized_vol) + 1e-10
-        vol_zscore = (realized_vol - vol_mean) / vol_std
+        # Shift before rolling so the baseline for date i contains only values
+        # available before i. Future observations and the current observation
+        # cannot change or dilute the signal being evaluated.
+        vol = pd.Series(realized_vol, dtype=float)
+        prior_vol = vol.shift(1)
+        vol_mean = prior_vol.rolling(
+            self.vol_lookback,
+            min_periods=self.vol_min_observations,
+        ).mean()
+        vol_std = prior_vol.rolling(
+            self.vol_lookback,
+            min_periods=self.vol_min_observations,
+        ).std(ddof=0)
+        vol_zscore = ((vol - vol_mean) / (vol_std + 1e-10)).to_numpy()
 
         signals = []
         for i, date in enumerate(dates):

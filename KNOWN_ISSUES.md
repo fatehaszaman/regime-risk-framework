@@ -7,13 +7,9 @@ Convention: a test that asserts an unresolved defect says so in its docstring.
 When the bug is fixed, that test is replaced with a regression test for the
 corrected result and the issue is removed from this list.
 
-Only unresolved issues are listed here. Issue #1 was replaced with regression
-tests after the curve builder was changed to smooth the effective-versus-
-official basis instead of the FX level.
-
-Issue **#6** remains a model-integrity problem: the regime label on a date
-depends on data from after that date. It feeds the classifier that the rest of
-the framework keys off and should be fixed before point-in-time use.
+Only unresolved issues are listed here. Issues #1 and #6 were replaced with
+regression tests after the FX curve became trend-invariant and the volatility
+signal became point-in-time safe.
 
 | # | Severity | Area | Issue |
 |---|----------|------|-------|
@@ -21,7 +17,6 @@ the framework keys off and should be fixed before point-in-time use.
 | 3 | Medium | `fx_curve` | `regime_flags` is one-sided; a large negative basis is never flagged |
 | 4 | Low | `fx_curve.build` | No input validation; empty input fails on a missing column |
 | 5 | Low | `fx_curve.build` | Official rate equal-weighted while effective rate is volume-weighted |
-| 6 | High | `regime_classifier.classify` | Volatility z-score uses full-sample statistics, so labels look ahead |
 | 7 | Low | `regime_classifier` | Policy window is calendar days, documented as trading days |
 | 8 | Medium | `regime_classifier` | All signals binary, so severity beyond a threshold is discarded |
 | 9 | High | `lc_priority.allocate` | `min_priority_threshold` is ignored whenever capacity is ample |
@@ -83,41 +78,6 @@ Fix: assert uniqueness per date and raise on disagreement.
 Test: `test_official_rate_is_equal_weighted_while_effective_is_volume_weighted`.
 
 ## regime_classifier
-
-### 6. Volatility z-score looks ahead (High)
-
-```python
-vol_mean = np.mean(realized_vol)
-vol_std = np.std(realized_vol) + 1e-10
-vol_zscore = (realized_vol - vol_mean) / vol_std
-```
-
-The mean and standard deviation come from the **entire** input array and are
-then applied date by date. The regime label on any given date therefore depends
-on volatility observed *after* that date. It cannot be computed in real time,
-and a label produced this way cannot be used to justify a decision that was
-taken on the day. This is the same class of error as look-ahead bias in a
-backtest.
-
-Two consequences beyond the principle:
-
-- **A single extreme day hides every other spike.** One observation large enough
-  inflates the standard deviation so that genuine spikes fall under the
-  threshold. The tests show three real spikes going unflagged because a fourth,
-  larger one is present.
-- **On short series the signal cannot fire at all.** The largest z-score
-  attainable over `n` observations is `(n - 1) / sqrt(n)`. Against the default
-  threshold of 2.0 that is unreachable for `n <= 5` regardless of how extreme
-  the observation is; `n = 6` is the first length at which the signal is
-  possible.
-
-Fix: an expanding or rolling window with a fixed minimum lookback, computed from
-data strictly before each date. The window length then becomes an explicit
-parameter, which it should be.
-
-Tests: `test_volatility_zscore_uses_the_whole_sample_and_so_looks_ahead`,
-`test_a_single_extreme_day_suppresses_every_other_vol_signal`,
-`test_vol_signal_is_unreachable_on_short_series`.
 
 ### 7. Policy window is calendar days (Low)
 

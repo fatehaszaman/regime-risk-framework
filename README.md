@@ -43,11 +43,13 @@ Rule-based classifier that assigns a regime label (NORMAL / ELEVATED / STRESSED 
 | FX basis | 35% | Spread between effective and official FX rate |
 | LC utilization | 30% | Fraction of USD allocation capacity in use |
 | Policy event | 20% | Proximity to known policy discontinuity dates |
-| Volatility | 15% | Z-score of realized vol |
+| Volatility | 15% | Point-in-time z-score against prior realized vol |
 
-The volatility z-score is currently computed from full-sample statistics, so a
-label depends on data from after its own date and cannot be reproduced in real
-time. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) #6.
+The volatility baseline uses 20 observations strictly before each date, so the
+first eligible signal is the 21st observation. This is an illustrative
+one-month observation window, not an empirically calibrated optimum; both the
+lookback and minimum history are configurable. Future data and the current
+observation cannot revise or dilute the signal being scored.
 
 ### `scenario_engine.py` -- Scenario Dashboard
 
@@ -120,29 +122,24 @@ curve, realized settlement rates are set exactly equal to the official rate on
 every date while both trend. The regression tests require a zero basis and no
 stress flags throughout.
 
-Writing the suite surfaced 16 defects. Issue #1 is fixed and protected by
-regression tests; the remaining 15 are recorded in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md) with severity and a proposed fix. The most
-important remaining temporal-integrity issue changes conclusions rather than
-just outputs:
+Writing the suite surfaced 16 defects. Issues #1 and #6 are fixed and protected
+by regression tests; the remaining 14 are recorded in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md) with severity and a proposed fix. The
+remaining high-severity items concern controls and scenario valuation:
 
-- The regime label on a date depends on volatility observed after that date, so
-  it cannot be computed in real time. A consequence worth knowing separately:
-  because the z-score is full-sample, the largest value attainable over `n`
-  observations is `(n-1)/sqrt(n)`, so at the default threshold the volatility
-  signal cannot fire at all for `n <= 5`.
-
-Three more are cases of a documented field that is never read —
-`Position.settlement_fx`, `entry_price_usd`, `quantity` — and one is a control
-that silently does nothing: `min_priority_threshold` is only checked after
-capacity runs out, so an LC scoring below it is approved whenever there is room.
+- `min_priority_threshold` is only checked after capacity runs out, so a weak LC
+  can be approved whenever there is room.
+- `Position.settlement_fx` is never read, so positions with different settlement
+  rates are valued identically.
+- Shocked tariff levels are not clamped, so sufficiently large shocks can make
+  a tariff negative.
 
 Tests that assert an unresolved defect say so in the docstring and cite the
 issue number. When a bug is fixed, the pinning test is replaced with a
 regression test for the corrected result.
 
-Issue #1 and its documentation were corrected together; the remaining issues
-stay explicit until their fixes and regression tests land.
+Issues #1 and #6 and their documentation were corrected together; the remaining
+issues stay explicit until their fixes and regression tests land.
 
 ## Requirements
 

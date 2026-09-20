@@ -62,13 +62,14 @@ and `_near_policy_event` in the same file.
 # Time: O(T*(E+1))
 # Memory: O(T+E) peak additional memory, including returned records
 
-mean_vol = MEAN(all supplied volatility values)
-std_vol = STD(all supplied volatility values) + epsilon
-z = (volatility - mean_vol) / std_vol
+prior_vol = SHIFT(volatility, 1)
+rolling_mean = TRAILING_MEAN(prior_vol, lookback=20, minimum=20)
+rolling_std = TRAILING_STD(prior_vol, lookback=20, minimum=20) + epsilon
+z = (volatility - rolling_mean) / rolling_std
 FOR each date i:
     fx_flag = fx_basis[i] > configured threshold
     lc_flag = utilization[i] > configured threshold
-    vol_flag = z[i] > configured threshold
+    vol_flag = history is sufficient AND z[i] > configured threshold
     event_flag = any configured event lies within 3 calendar days
     score = SUM(fixed signal weights * flags)
     label = first descending threshold satisfied by score
@@ -76,10 +77,11 @@ FOR each date i:
 RETURN records
 ```
 
-Why: normalization scans T values; each date scans all E policy dates and
-allocates an E-element distance vector. Four signal weights and four label
-thresholds are fixed constants. Output records and the volatility z-score vector
-both grow with T.
+Why: shifted rolling statistics scan T values once and exclude both the current
+and future observations from each date's volatility baseline. Each date still
+scans all E policy dates and allocates an E-element distance vector. Four signal
+weights and four label thresholds are fixed constants. Output records and the
+volatility z-score vector both grow with T.
 
 Example: with no policy dates, that flag is false and classification is O(T).
 Adding 1,000 policy dates does not become an indexed lookup; all are considered
@@ -87,9 +89,14 @@ for every classification date.
 
 ## Interpretation and edge cases
 
-- **Historical use:** normalization uses the entire supplied volatility array,
-  not only history available at each date. Passing a full backtest period can
-  therefore introduce look-ahead. This is not a point-in-time rolling classifier.
+- **Point-in-time volatility:** each z-score uses at most 20 observations
+  strictly before its date. Appending future data cannot revise an earlier
+  signal, and the current observation cannot inflate its own baseline.
+- **Cold start:** by default, the volatility signal remains false until 20 prior
+  observations exist, making the 21st observation the first eligible signal.
+  Twenty observations is an illustrative one-month heuristic, not an
+  empirically calibrated optimum. The lookback and minimum are configurable
+  observation counts, not calendar-day windows.
 - **Calendar semantics:** proximity is symmetric and uses calendar days.
   Whether a future policy event was already announced is not checked here.
 - **Input contract:** arrays should align with dates and contain finite values.
@@ -97,5 +104,5 @@ for every classification date.
 - **Constant volatility:** epsilon prevents division by zero, but does not make
   the resulting threshold system empirically calibrated.
 
-These notes document current behavior; they do not introduce a rolling
-normalization or event-date index.
+These notes document current behavior; they do not introduce an event-date
+index or change the policy-event semantics.
