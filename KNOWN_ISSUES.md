@@ -3,24 +3,20 @@
 Found by writing the test suite. Each item has a test that pins the current
 behaviour and cites this file by number.
 
-Convention: a test that asserts a defect says so in its docstring. It passes
-today. Fixing the underlying bug will break that test, which is the signal to
-delete the test and the entry together.
+Convention: a test that asserts an unresolved defect says so in its docstring.
+When the bug is fixed, that test is replaced with a regression test for the
+corrected result and the issue is removed from this list.
 
-Nothing here is fixed yet. They are recorded rather than patched so the
-behaviour of the published version is documented, and so a fix and the
-description of the fix land in the same commit.
+Only unresolved issues are listed here. Issue #1 was replaced with regression
+tests after the curve builder was changed to smooth the effective-versus-
+official basis instead of the FX level.
 
-Two of these are serious enough to affect conclusions rather than just outputs:
-**#1**, where the curve builder manufactures an FX basis out of a pure trend and
-falsely flags a stressed regime, and **#6**, where the regime label on a date
-depends on data from after that date. Both are the same family of error —
-a smoothing or scaling operation reaching across time — and both feed the
-classifier that the rest of the framework keys off.
+Issue **#6** remains a model-integrity problem: the regime label on a date
+depends on data from after that date. It feeds the classifier that the rest of
+the framework keys off and should be fixed before point-in-time use.
 
 | # | Severity | Area | Issue |
 |---|----------|------|-------|
-| 1 | High | `fx_curve.build` | Smoothed effective rate differenced against unsmoothed official rate manufactures a basis from trend, and fires false stress flags |
 | 2 | Medium | `fx_curve` | `smoothing_window` counts settlement rows, not the documented days |
 | 3 | Medium | `fx_curve` | `regime_flags` is one-sided; a large negative basis is never flagged |
 | 4 | Low | `fx_curve.build` | No input validation; empty input fails on a missing column |
@@ -41,38 +37,6 @@ classifier that the rest of the framework keys off.
 
 ## fx_curve
 
-### 1. Smoothing manufactures a basis from trend (High)
-
-`build()` smooths the effective rate with a trailing mean and then computes
-
-```python
-grouped["basis"] = grouped["effective_rate"] - grouped["official_rate"]
-```
-
-against the **unsmoothed** official rate. Differencing a lagged series against
-an unlagged one converts any trend in the level into a spurious basis.
-
-The size of the artefact is `slope * (smoothing_window - 1) / 2`. With the
-default 5-day window and an official rate moving 1.0 per day, it is 2.0 —
-exactly the default `stress_basis_threshold`.
-
-Constructed demonstration: realized rate set **equal to the official rate on
-every single day**, so the true basis is identically zero. With the official
-rate falling 1.5 per day the builder reports a basis of +3.0 and flags **9 of 12
-days as a stressed regime** on a series containing no dislocation at all.
-
-This is not a cosmetic problem. The basis is this module's headline output and
-the largest-weighted input to `RegimeClassifier` (0.35), so a false FX signal
-propagates into false ELEVATED and STRESSED labels, which is what the rest of
-the framework acts on.
-
-Fix: smooth both series with the same window before differencing, or smooth the
-basis itself rather than the level. Smoothing the basis is preferable — it is
-the quantity of interest, and it keeps the operation in one place.
-
-Tests: `test_smoothing_manufactures_a_basis_where_none_exists`,
-`test_a_trending_official_rate_fires_false_stress_flags`.
-
 ### 2. `smoothing_window` counts rows, not days (Medium)
 
 Documented as "Rolling window (in days)". `.rolling(n)` counts rows of the
@@ -89,9 +53,8 @@ Test: `test_smoothing_window_counts_rows_not_calendar_days`.
 
 `basis > stress_basis_threshold` never fires on a large negative basis, where
 LCs settle far *below* the official rate. Under import controls the basis is
-usually positive, which makes the one-sided test defensible on its own — but
-combined with #1 it means the trend artefact is silently ignored in one
-direction and falsely flagged in the other.
+usually positive, which makes the one-sided test defensible, but a negative
+dislocation remains invisible unless that directional choice is made explicit.
 
 Fix: flag on `abs(basis)`, or keep the one-sided test and say so explicitly in
 the docstring and the README.

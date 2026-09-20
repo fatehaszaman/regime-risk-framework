@@ -3,6 +3,52 @@
 This guide follows the current classifier, including its limitations. Complexity
 is an operation-count model, not a latency benchmark or a validation claim.
 
+## Effective FX basis construction
+
+Implementation: [`EffectiveFXCurveBuilder.build`](../regime_risk/fx_curve.py).
+
+```text
+# Effective FX Basis / Trend-Invariant Smoothing
+# Goal: estimate the realized settlement dislocation from the official FX rate.
+# Input: N settlement records across D distinct dates; smoothing window W
+# Output: D effective rates, bases, and stress flags
+# Time: O(N log N + D) including the date sort
+# Memory: O(N + D) peak additional memory
+
+SORT settlements by date
+GROUP settlements by date
+FOR each date d:
+    official[d] = MEAN(official rates reported for d)
+    realized[d] = WEIGHTED_MEAN(realized rates, LC amounts)
+    IF observation_count[d] < configured minimum:
+        realized[d] = official[d]
+
+    raw_basis[d] = realized[d] - official[d]
+
+smoothed_basis = TRAILING_MEAN(raw_basis, W)
+effective_rate = official + smoothed_basis
+stress_flag = smoothed_basis > configured threshold
+RETURN dates, official, effective_rate, smoothed_basis, stress_flag
+```
+
+The operation order is deliberate. The signal of interest is the settlement
+dislocation, not the absolute FX level. If realized and official rates move
+together, `raw_basis` is zero at every date and its trailing mean remains zero.
+Smoothing the realized level first and subtracting the current official level
+would instead compare a lagged value with an unlagged value, converting an
+ordinary shared trend into a false basis.
+
+Reconstructing `effective_rate` as `official + smoothed_basis` preserves the
+reported identity `basis = effective_rate - official` at every date while
+anchoring the smoothed dislocation to the current official rate. This lets the
+curve reduce day-to-day settlement noise without creating stress signals from
+level drift alone.
+
+Current limitations remain explicit: `W` counts settlement-date rows rather
+than calendar or business days, and the stress threshold is one-sided. These
+are tracked separately as issues #2 and #3 in
+[`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md).
+
 ## Threshold-based regime classification
 
 Implementation: [`RegimeClassifier.classify`](../regime_risk/regime_classifier.py)

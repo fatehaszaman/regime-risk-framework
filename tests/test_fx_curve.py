@@ -79,46 +79,21 @@ def test_basis_is_effective_minus_official(flat_settlements):
 
 # ------------------------------------------------------------------- defects
 
-def test_smoothing_manufactures_a_basis_where_none_exists(zero_basis_trending):
-    """DEFECT, HIGH: the effective rate is smoothed with a trailing mean and the
-    basis is then taken against the UNSMOOTHED official rate.
-
-    Differencing a lagged series against an unlagged one converts any trend in
-    the level into a spurious basis. Here realized equals official exactly every
-    single day, so the true basis is identically zero, and the builder reports a
-    basis converging to -2.0.
-
-    The artefact equals slope * (window - 1) / 2 — the lag of the trailing mean
-    times the drift. It is a pure function of the trend, with no information in
-    it at all. See KNOWN_ISSUES.md #1.
-    """
+def test_smoothing_preserves_zero_basis_when_official_rate_trends(zero_basis_trending):
+    """Smoothing the basis must not turn a shared FX trend into a dislocation."""
     curve = EffectiveFXCurveBuilder(smoothing_window=5).build(zero_basis_trending)
 
-    assert not np.allclose(curve.effective_rates, curve.official_rates)
-    # slope 1.0/day, window 5 -> plateau at -(1.0 * 4 / 2) = -2.0
-    assert curve.basis[-1] == pytest.approx(-2.0)
-    assert curve.basis[0] == pytest.approx(0.0), "artefact accumulates over the warm-up"
-    assert not np.allclose(curve.basis, 0.0), "true basis is zero everywhere"
+    assert np.allclose(curve.basis, 0.0)
+    assert np.allclose(curve.effective_rates, curve.official_rates)
 
 
-def test_a_trending_official_rate_fires_false_stress_flags():
-    """DEFECT, HIGH: consequence of #1 that actually reaches a decision.
-
-    Same construction — realized equals official exactly, true basis zero — but
-    with the official rate FALLING, which flips the artefact positive. At a
-    slope of -1.5/day the artefact is +3.0, above the default stress threshold
-    of 2.0, and the builder flags 9 of 12 days as a stressed regime on a series
-    containing no dislocation whatsoever.
-
-    This is the input the regime classifier weights most heavily (0.35), so the
-    false signal propagates into false ELEVATED and STRESSED labels downstream.
-    See KNOWN_ISSUES.md #1.
-    """
+def test_trending_official_rate_does_not_fire_false_stress_flags():
+    """A falling official rate shared by realized settlements is not stress."""
     s = [settlement(d, 200.0 - 1.5 * d, 200.0 - 1.5 * d) for d in range(12) for _ in range(3)]
     curve = EffectiveFXCurveBuilder(smoothing_window=5, stress_basis_threshold=2.0).build(s)
 
-    assert curve.basis[-1] == pytest.approx(3.0)
-    assert curve.regime_flags.sum() == 9
+    assert np.allclose(curve.basis, 0.0)
+    assert not curve.regime_flags.any()
 
 
 def test_smoothing_window_counts_rows_not_calendar_days():
@@ -140,9 +115,8 @@ def test_negative_basis_is_never_flagged_however_large():
 
     A large NEGATIVE basis — realized settling far below the official rate — is
     also a dislocation and is never flagged. Under import controls the basis is
-    usually positive, which makes the one-sided test defensible, but combined
-    with #1 it means the trend artefact is silently unflagged in one direction
-    and falsely flagged in the other. See KNOWN_ISSUES.md #3.
+    usually positive, which makes the one-sided test defensible, but the
+    directional choice is not documented. See KNOWN_ISSUES.md #3.
     """
     s = [settlement(d, 100.0, 40.0) for d in range(6) for _ in range(3)]
     curve = EffectiveFXCurveBuilder(stress_basis_threshold=2.0, smoothing_window=1).build(s)
