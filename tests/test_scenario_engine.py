@@ -127,97 +127,70 @@ def test_run_all_accepts_custom_scenarios(one_position):
 
 # ------------------------------------------------------------------- defects
 
-def test_per_position_settlement_fx_is_never_used():
-    """DEFECT, HIGH: Position.settlement_fx is documented as "Expected LCY/USD
-    rate at settlement" and the engine never reads it. Every position is valued
-    at the single engine-level base_fx_rate.
-
-    A book whose positions were contracted at different settlement rates — the
-    normal case when LCs are opened over months of a moving rate — is revalued
-    as though they all settle at one rate. The field reads as load-bearing and
-    is inert.
-
-    Two positions with settlement rates 80 and 200 produce identical P&L.
-    See KNOWN_ISSUES.md #13.
-    """
+def test_per_position_settlement_fx_is_used():
+    """Regression #13: each settlement rate determines the commodity leg."""
     cheap = engine().run([position("A", settlement_fx=80.0)],
                          ScenarioShock("s", "", fx_shift=5.0, commodity_shocks={"copper": 0.1}))
     dear = engine().run([position("B", settlement_fx=200.0)],
                         ScenarioShock("s", "", fx_shift=5.0, commodity_shocks={"copper": 0.1}))
-    assert cheap.total_pnl_lcy == dear.total_pnl_lcy
+    assert cheap.total_pnl_lcy == pytest.approx(-5_000_000 - 100_000 * 85)
+    assert dear.total_pnl_lcy == pytest.approx(-5_000_000 - 100_000 * 205)
 
 
-def test_shocks_are_not_clamped_so_tariffs_can_go_negative():
-    """DEFECT, HIGH: the engine applies shifts without reference to the levels on
-    the Position, so nothing stops a shock implying a negative tariff rate.
-
-    The position carries tariff_rate 0.05. A tariff_shift of -0.20 takes the
-    implied rate to -0.15 and the engine books a large GAIN, as though customs
-    paid the importer a 15% subsidy on the shipment. The same holds for
-    lc_fee_pct.
-
-    Position.tariff_rate and Position.lc_fee_pct exist and are never read, so
-    the engine has the information it needs to clamp and does not use it.
-    See KNOWN_ISSUES.md #14.
-    """
+def test_tariff_and_fee_reductions_stop_at_zero():
+    """Regression #14: a reduction can eliminate charges, not create subsidies."""
     pos = position()
     assert pos.tariff_rate == 0.05
-    r = engine().run([pos], ScenarioShock("t", "", tariff_shift=-0.20))
-    assert r.attribution["tariffs"] > 0, "a gain from a tariff rate below zero"
-    assert r.attribution["tariffs"] == pytest.approx(22_000_000.0)
+    r = engine().run([pos], ScenarioShock("t", "", tariff_shift=-0.20, lc_fee_shift=-0.2))
+    assert r.attribution["tariffs"] == pytest.approx(5_500_000.0)
+    assert r.attribution["lc_fees"] == pytest.approx(1_100_000.0)
 
 
-def test_entry_price_and_quantity_are_never_used():
-    """DEFECT, medium: entry_price_usd, quantity and unit are all unused. The
-    engine works purely in notional and percentage shifts, so it cannot report
-    cost per tonne, and a position whose notional disagrees with
-    quantity x entry_price is never caught.
-
-    Here quantity x entry_price is 1,000 x 1,000 = 1,000,000 but the notional
-    says 9,000,000, and the engine reports P&L off the notional without
-    complaint. See KNOWN_ISSUES.md #15.
-    """
+def test_inconsistent_notional_is_rejected():
+    """Regression #15: physical quantity and invoice notional must reconcile."""
     inconsistent = Position(
         position_id="BAD", commodity="copper", notional_usd=9_000_000.0,
         quantity=1_000.0, unit="tonne", entry_price_usd=1_000.0,
         lc_fee_pct=0.01, tariff_rate=0.05, settlement_fx=110.0,
     )
-    r = engine().run([inconsistent], ScenarioShock("fx", "", fx_shift=1.0))
-    assert r.attribution["fx"] == pytest.approx(-9_000_000.0)
+    with pytest.raises(ValueError, match="Notional must equal"):
+        engine().run([inconsistent], ScenarioShock("fx", "", fx_shift=1.0))
 
 
-def test_scenario_descriptions_quote_percentages_only_true_at_the_default_rate():
-    """DEFECT, low: fx_shift is an ABSOLUTE LCY/USD move while the scenario
-    descriptions express the same thing as a percentage devaluation. The two
-    only agree at base_fx_rate = 110, which is a configurable default.
-
-    Political_Discontinuity says the currency "devalues ~8%" with fx_shift 8.5:
-    at 110 that is a 7.7% move on the rate, close enough. Run the same scenario
-    with base_fx_rate 50 and it becomes 17%, and the description is simply
-    wrong — while the reported P&L changes not at all, because FX P&L is
-    notional x shift and does not depend on the base rate.
-
-    So the description is rate-dependent and the number it describes is not.
-    See KNOWN_ISSUES.md #16.
-    """
+def test_scenario_descriptions_use_absolute_fx_units():
+    """Regression #16: descriptions match parameter units at any baseline."""
     political = DEFAULT_SCENARIOS[1]
-    assert "8%" in political.description and political.fx_shift == 8.5
-    assert 8.5 / 110.0 == pytest.approx(0.0773, abs=1e-4)
-    assert 8.5 / 50.0 == pytest.approx(0.17, abs=1e-4)
-
-    at_110 = ScenarioEngine(110.0).run([position()], political).attribution["fx"]
-    at_50 = ScenarioEngine(50.0).run([position()], political).attribution["fx"]
-    assert at_110 == at_50, "FX attribution ignores the base rate entirely"
+    assert "LCY/USD +8.5" in political.description and political.fx_shift == 8.5
+    assert "LCY/USD +15" in DEFAULT_SCENARIOS[4].description
 
 
-def test_tariff_circular_description_confuses_points_with_percent():
-    """DEFECT, low: "New import tariff circular increases duties by 10%" is
-    implemented as tariff_shift 0.10, which is 10 percentage POINTS.
-
-    On a position at a 5% duty, 10 points takes it to 15% — a 200% relative
-    increase, not 10%. See KNOWN_ISSUES.md #16.
-    """
+def test_tariff_circular_description_uses_percentage_points():
+    """Regression #16: additive rates are percentage-point changes."""
     tariff = DEFAULT_SCENARIOS[3]
-    assert "by 10%" in tariff.description
+    assert "10 percentage points" in tariff.description
     assert tariff.tariff_shift == 0.10
     assert position().tariff_rate == 0.05
+
+
+def test_unset_settlement_fx_uses_engine_baseline():
+    r = ScenarioEngine(80).run([position(settlement_fx=None)],
+                              ScenarioShock("c", "", commodity_shocks={"copper": 0.1}))
+    assert r.attribution["commodity"] == -8_000_000
+
+
+def test_per_unit_output_reconciles_with_total(one_position):
+    r = engine().run(one_position, ScenarioShock("fx", "", fx_shift=1))
+    assert r.position_pnl.iloc[0]["pnl_per_unit_lcy"] == -1000
+    assert r.position_pnl.iloc[0]["unit"] == "tonne"
+
+
+@pytest.mark.parametrize("shift", [-110, -111, float("nan")])
+def test_invalid_shocked_fx_is_rejected(one_position, shift):
+    with pytest.raises(ValueError):
+        engine().run(one_position, ScenarioShock("invalid", "", fx_shift=shift))
+
+
+def test_empty_book_has_zero_impact():
+    r = engine().run([], ScenarioShock("empty", ""))
+    assert r.total_pnl_lcy == 0
+    assert r.position_pnl.empty

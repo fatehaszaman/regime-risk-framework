@@ -41,7 +41,7 @@ def test_cost_efficiency_falls_back_when_all_costs_are_zero():
 
 
 def test_weights_must_sum_to_one():
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         LCPriorityAllocator(urgency_weight=0.9, strategic_weight=0.9)
 
 
@@ -125,28 +125,17 @@ def test_to_dataframe_has_a_row_per_decision():
 
 # ------------------------------------------------------------------- defects
 
-def test_minimum_priority_threshold_is_ignored_when_capacity_is_ample():
-    """DEFECT, HIGH: `min_priority_threshold` is only consulted in the `elif`
-    branch, which is reached only after capacity has run out.
-
-    An LC scoring far below the threshold is APPROVED whenever there happens to
-    be room for it. The parameter is documented as "LCs below this score are
-    cancelled rather than deferred", and it silently does nothing in the case
-    that matters most — a well-funded cycle, where the control is supposed to
-    stop money going to requests that do not justify it.
-
-    Here an LC scoring 3.0 against a threshold of 20.0 is approved.
-    See KNOWN_ISSUES.md #9.
-    """
+def test_minimum_priority_threshold_applies_even_with_ample_capacity():
+    """Regression #9: budget availability must not bypass the score control."""
     a = LCPriorityAllocator(min_priority_threshold=20.0)
     junk = lc("JUNK", 1_000.0, urgency=0.0, strategic=0.0, days=365, unit_cost=100.0)
     plan = a.allocate([junk], 100_000_000.0)
 
     decision = plan.decisions[0]
     assert decision.priority_score < 20.0
-    assert decision.status is LCStatus.APPROVED, (
-        "approved despite scoring below the minimum threshold"
-    )
+    assert decision.status is LCStatus.CANCELLED
+    assert plan.total_allocated_usd == 0
+    assert plan.total_cancelled_usd == 1_000.0
 
 
 def test_a_score_depends_on_which_other_lcs_are_in_the_batch():
@@ -172,17 +161,8 @@ def test_a_score_depends_on_which_other_lcs_are_in_the_batch():
     assert alone != target_score
 
 
-def test_capacity_is_left_unused_because_allocation_is_strictly_greedy():
-    """DEFECT, medium: allocation is first-fit down the priority ranking, so a
-    large high-priority LC that does not fit is deferred and smaller LCs further
-    down are then funded from what remains.
-
-    That is a reasonable policy, but nothing reports the resulting slack, and
-    `utilization_rate` is the only clue. Here 100k of a 1m cycle is left unspent
-    with a deferred LC on the books that a different ordering could have partly
-    served. Documented rather than called a bug, since the alternative is a
-    knapsack solve. See KNOWN_ISSUES.md #11.
-    """
+def test_greedy_allocation_reports_unused_capacity():
+    """Regression #11: preserve whole-request priority ordering, expose slack."""
     a = LCPriorityAllocator()
     batch = [lc("BIG", 900_000.0, urgency=10, strategic=10, days=1),
              lc("ALSO_BIG", 900_000.0, urgency=9, strategic=9, days=2)]
@@ -190,17 +170,12 @@ def test_capacity_is_left_unused_because_allocation_is_strictly_greedy():
     assert plan.total_allocated_usd == 900_000.0
     assert plan.total_deferred_usd == 900_000.0
     assert plan.utilization_rate == pytest.approx(0.9)
+    assert plan.unallocated_usd == 100_000.0
+    assert "100,000.00" in plan.decisions[1].reason
 
 
-def test_weight_validation_uses_assert_and_vanishes_under_optimisation():
-    """DEFECT, low: the weights-sum-to-one check is an `assert`, which Python
-    removes entirely when run with -O.
-
-    Input validation that disappears in an optimised interpreter is not input
-    validation. With the check stripped, weights summing to 2.0 would silently
-    produce scores up to 200 on a scale documented as 0-100.
-    See KNOWN_ISSUES.md #12.
-    """
+def test_weight_validation_survives_optimisation():
+    """Regression #12: invalid weights still fail under python -O."""
     import subprocess
     import sys
 
@@ -211,5 +186,25 @@ def test_weight_validation_uses_assert_and_vanishes_under_optimisation():
         "print('constructed with weights summing to 2.0')"
     )
     r = subprocess.run([sys.executable, "-O", "-c", code], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert "constructed" in r.stdout
+    assert r.returncode != 0
+    assert "ValueError" in r.stderr
+    assert "constructed" not in r.stdout
+
+
+@pytest.mark.parametrize("capacity", [-1, float("nan"), float("inf")])
+def test_invalid_capacity_is_rejected(capacity):
+    with pytest.raises(ValueError):
+        LCPriorityAllocator().allocate([], capacity)
+
+
+def test_negative_weight_is_rejected_even_if_sum_is_one():
+    with pytest.raises(ValueError):
+        LCPriorityAllocator(urgency_weight=-0.1, strategic_weight=0.6,
+                            expiry_weight=0.2, cost_weight=0.3)
+
+
+def test_exact_threshold_is_eligible_and_expired_score_is_bounded():
+    a = LCPriorityAllocator(urgency_weight=1, strategic_weight=0, expiry_weight=0,
+                            cost_weight=0, min_priority_threshold=20)
+    assert a.allocate([lc("EDGE", 100, urgency=2)], 100).decisions[0].status is LCStatus.APPROVED
+    assert a._expiry_urgency(-10) == 10
