@@ -94,7 +94,7 @@ The demo simulates a 6-month tightening cycle. Official FX rates drift while rea
 │   ├── scenario_engine.py    # Shock scenario engine
 │   ├── lc_priority.py        # LC priority allocator
 │   └── __init__.py
-├── tests/                    # 78 tests, one file per module
+├── tests/                    # Arithmetic and behavioral regression tests
 ├── examples/
 │   └── demo.py               # End-to-end demo
 ├── KNOWN_ISSUES.md           # Defects found by the test suite
@@ -111,7 +111,7 @@ pip install -r requirements-dev.txt
 PYTHONPATH=. python -m pytest
 ```
 
-78 tests, one file per module. The scoring and P&L arithmetic in this framework
+Tests are organized by module. The scoring and P&L arithmetic in this framework
 is simple enough to work out on paper, so the tests do that rather than freezing
 whatever the code currently returns: expected values are derived from the
 formulas in the class docstrings and from series whose correct answer is known by
@@ -122,24 +122,22 @@ curve, realized settlement rates are set exactly equal to the official rate on
 every date while both trend. The regression tests require a zero basis and no
 stress flags throughout.
 
-Writing the suite surfaced 16 defects. Issues #1 and #6 are fixed and protected
-by regression tests; the remaining 14 are recorded in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md) with severity and a proposed fix. The
-remaining high-severity items concern controls and scenario valuation:
+The allocation threshold now applies regardless of available capacity, unused
+capacity is reported, and invalid weights fail even under `python -O`.
+Scenario calculations use each position's settlement FX, floor fee and tariff
+levels at zero, and reconcile notional to quantity times entry price.
+Hand-calculated regression tests cover these corrections.
 
-- `min_priority_threshold` is only checked after capacity runs out, so a weak LC
-  can be approved whenever there is room.
-- `Position.settlement_fx` is never read, so positions with different settlement
-  rates are valued identically.
-- Shocked tariff levels are not clamped, so sufficiently large shocks can make
-  a tariff negative.
+The scenario engine remains an additive invoice-notional sensitivity model,
+not a full landed-cost repricer. Existing fee/tariff amounts are not revalued
+under FX and commodity changes. Its precise formula and the remaining issues
+are documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 Tests that assert an unresolved defect say so in the docstring and cite the
 issue number. When a bug is fixed, the pinning test is replaced with a
 regression test for the corrected result.
 
-Issues #1 and #6 and their documentation were corrected together; the remaining
-issues stay explicit until their fixes and regression tests land.
+Remaining issues stay explicit until their fixes and regression tests land.
 
 ## Requirements
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from math import isfinite
 
 import pandas as pd
 
@@ -85,6 +86,11 @@ class AllocationPlan:
     decisions: list[AllocationDecision]
 
     @property
+    def unallocated_usd(self) -> float:
+        """Capacity left unused by the whole-request, priority-first policy."""
+        return round(self.total_capacity_usd - self.total_allocated_usd, 2)
+
+    @property
     def utilization_rate(self) -> float:
         return self.total_allocated_usd / self.total_capacity_usd if self.total_capacity_usd > 0 else 0.0
 
@@ -140,8 +146,11 @@ class LCPriorityAllocator:
         cost_weight: float = 0.15,
         min_priority_threshold: float = 20.0,
     ):
-        assert abs(urgency_weight + strategic_weight + expiry_weight + cost_weight - 1.0) < 1e-6, \
-            "Weights must sum to 1.0"
+        weights = (urgency_weight, strategic_weight, expiry_weight, cost_weight)
+        if any(not isfinite(w) or w < 0 for w in weights) or abs(sum(weights) - 1.0) >= 1e-6:
+            raise ValueError("Weights must be finite, non-negative and sum to 1.0")
+        if not isfinite(min_priority_threshold) or not 0 <= min_priority_threshold <= 100:
+            raise ValueError("Minimum priority threshold must be between 0 and 100")
         self.urgency_weight = urgency_weight
         self.strategic_weight = strategic_weight
         self.expiry_weight = expiry_weight
@@ -150,7 +159,7 @@ class LCPriorityAllocator:
 
     def _expiry_urgency(self, days: int) -> float:
         """Higher score = closer to expiry."""
-        return max(0.0, 10.0 - days / 3.0)
+        return min(10.0, max(0.0, 10.0 - days / 3.0))
 
     def _cost_efficiency(self, unit_cost: float, max_cost: float) -> float:
         """Higher score = lower unit cost relative to peers."""
@@ -191,6 +200,15 @@ class LCPriorityAllocator:
         -------
         AllocationPlan
         """
+        if not isfinite(available_usd) or available_usd < 0:
+            raise ValueError("Available capacity must be finite and non-negative")
+        for lc in pending_lcs:
+            if any(not isfinite(x) or x < 0 for x in (lc.amount_usd, lc.unit_cost_usd, lc.quantity)):
+                raise ValueError("LC amount, unit cost and quantity must be finite and non-negative")
+            if any(not isfinite(x) or not 0 <= x <= 10 for x in (lc.urgency_score, lc.strategic_score)):
+                raise ValueError("LC urgency and strategic scores must be between 0 and 10")
+            if not isfinite(lc.days_until_expiry):
+                raise ValueError("Days until expiry must be finite")
         if not pending_lcs:
             return AllocationPlan(available_usd, 0, 0, 0, [])
 
@@ -207,18 +225,18 @@ class LCPriorityAllocator:
         allocated = deferred = cancelled = 0.0
 
         for lc, score in scored:
-            if remaining >= lc.amount_usd:
+            if score < self.min_priority_threshold:
+                status = LCStatus.CANCELLED
+                reason = f"Priority {score:.1f}/100: below minimum threshold ({self.min_priority_threshold})"
+                cancelled += lc.amount_usd
+            elif remaining >= lc.amount_usd:
                 status = LCStatus.APPROVED
                 reason = f"Priority {score:.1f}/100 — allocated within capacity"
                 remaining -= lc.amount_usd
                 allocated += lc.amount_usd
-            elif score < self.min_priority_threshold:
-                status = LCStatus.CANCELLED
-                reason = f"Priority {score:.1f}/100 — below minimum threshold ({self.min_priority_threshold})"
-                cancelled += lc.amount_usd
             else:
                 status = LCStatus.DEFERRED
-                reason = f"Priority {score:.1f}/100 — capacity exhausted, defer to next cycle"
+                reason = f"Priority {score:.1f}/100: request exceeds remaining capacity of USD {remaining:,.2f}"
                 deferred += lc.amount_usd
 
             decisions.append(AllocationDecision(

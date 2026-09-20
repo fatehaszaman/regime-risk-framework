@@ -12,7 +12,7 @@ by regulators or governments.
 
 This engine provides pre-built, parameterized shock scenarios that can
 be re-run instantly against a position book when a new policy event
-occurs — cutting response time from days to minutes.
+occurs. Scenarios are illustrative assumptions, not calibrated forecasts.
 
 Each scenario specifies shocks to:
   - FX rates (local currency / USD effective rate shifts)
@@ -27,6 +27,7 @@ by shock type, position, and commodity.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isclose, isfinite
 from typing import Optional
 
 import pandas as pd
@@ -43,7 +44,7 @@ class Position:
     entry_price_usd: float      # Price per unit at entry
     lc_fee_pct: float           # LC opening fee as % of notional
     tariff_rate: float          # Import tariff rate (e.g. 0.15 = 15%)
-    settlement_fx: float        # Expected LCY/USD rate at settlement
+    settlement_fx: Optional[float] = None  # LCY/USD; None uses engine baseline
 
 
 @dataclass
@@ -75,8 +76,7 @@ class ScenarioResult:
 
 
 # Pre-built scenarios covering common emerging market regime events.
-# Calibrated to historical observations across EM currency crises,
-# import control regimes, and political discontinuities.
+# Illustrative parameters, not an empirically calibrated crisis distribution.
 DEFAULT_SCENARIOS = [
     ScenarioShock(
         name="LC_Rationing_Onset",
@@ -86,7 +86,7 @@ DEFAULT_SCENARIOS = [
     ),
     ScenarioShock(
         name="Political_Discontinuity",
-        description="Government transition — local currency devalues ~8%, tariff policy uncertainty",
+        description="Government transition: LCY/USD +8.5, LC fees +2 percentage points, tariffs +5 percentage points",
         fx_shift=8.5,
         commodity_shocks={"copper": 0.03, "PVC": 0.02},
         lc_fee_shift=0.02,
@@ -100,12 +100,12 @@ DEFAULT_SCENARIOS = [
     ),
     ScenarioShock(
         name="Tariff_Circular",
-        description="New import tariff circular increases duties by 10%",
+        description="New import tariff circular increases duties by 10 percentage points",
         tariff_shift=0.10,
     ),
     ScenarioShock(
         name="Severe_Stress",
-        description="Combined tail scenario: LCY -15%, commodities +10-20%, LC fees +300bps, tariffs +15%",
+        description="Combined tail scenario: LCY/USD +15, commodities +8-20%, LC fees +300bps, tariffs +15 percentage points",
         fx_shift=15.0,
         commodity_shocks={"copper": 0.20, "PVC": 0.10, "energy": 0.08},
         lc_fee_shift=0.03,
@@ -125,6 +125,8 @@ class ScenarioEngine:
     """
 
     def __init__(self, base_fx_rate: float = 110.0):
+        if not isfinite(base_fx_rate) or base_fx_rate <= 0:
+            raise ValueError("Base FX rate must be finite and positive")
         self.base_fx_rate = base_fx_rate
 
     def run(
@@ -151,10 +153,29 @@ class ScenarioEngine:
         -------
         ScenarioResult
         """
-        shocked_fx = self.base_fx_rate + scenario.fx_shift
+        # Additive invoice-notional sensitivity, not full landed-cost repricing:
+        # base fees/duties are not themselves revalued under FX/price shocks.
+        shifts = [scenario.fx_shift, scenario.lc_fee_shift, scenario.tariff_shift,
+                  *scenario.commodity_shocks.values()]
+        if not all(isfinite(x) for x in shifts):
+            raise ValueError("Scenario shifts must be finite")
+        if any(x < -1 for x in scenario.commodity_shocks.values()):
+            raise ValueError("Commodity shocks cannot imply negative prices")
         records = []
 
         for pos in positions:
+            values = (pos.notional_usd, pos.quantity, pos.entry_price_usd)
+            if any(not isfinite(x) or x <= 0 for x in values):
+                raise ValueError("Notional, quantity and entry price must be finite and positive")
+            if not isclose(pos.notional_usd, pos.quantity * pos.entry_price_usd,
+                           rel_tol=1e-8, abs_tol=0.01):
+                raise ValueError("Notional must equal quantity times entry price")
+            if any(not isfinite(x) or x < 0 for x in (pos.lc_fee_pct, pos.tariff_rate)):
+                raise ValueError("Baseline fees and tariffs must be finite and non-negative")
+            base_fx = self.base_fx_rate if pos.settlement_fx is None else pos.settlement_fx
+            shocked_fx = base_fx + scenario.fx_shift
+            if not isfinite(base_fx) or base_fx <= 0 or not isfinite(shocked_fx) or shocked_fx <= 0:
+                raise ValueError("Baseline and shocked settlement FX must be finite and positive")
             # FX P&L: same USD notional costs more LCY when currency weakens
             fx_pnl_lcy = -pos.notional_usd * scenario.fx_shift
 
@@ -164,10 +185,12 @@ class ScenarioEngine:
             commodity_pnl_lcy = commodity_pnl_usd * shocked_fx
 
             # LC fee P&L
-            lc_pnl_lcy = -pos.notional_usd * scenario.lc_fee_shift * shocked_fx
+            lc_delta = max(0.0, pos.lc_fee_pct + scenario.lc_fee_shift) - pos.lc_fee_pct
+            lc_pnl_lcy = -pos.notional_usd * lc_delta * shocked_fx
 
             # Tariff P&L
-            tariff_pnl_lcy = -pos.notional_usd * scenario.tariff_shift * shocked_fx
+            tariff_delta = max(0.0, pos.tariff_rate + scenario.tariff_shift) - pos.tariff_rate
+            tariff_pnl_lcy = -pos.notional_usd * tariff_delta * shocked_fx
 
             total_pnl_lcy = fx_pnl_lcy + commodity_pnl_lcy + lc_pnl_lcy + tariff_pnl_lcy
 
@@ -175,6 +198,8 @@ class ScenarioEngine:
                 "position_id": pos.position_id,
                 "commodity": pos.commodity,
                 "notional_usd": pos.notional_usd,
+                "unit": pos.unit,
+                "pnl_per_unit_lcy": round(total_pnl_lcy / pos.quantity, 2),
                 "fx_pnl_lcy": round(fx_pnl_lcy, 2),
                 "commodity_pnl_lcy": round(commodity_pnl_lcy, 2),
                 "lc_pnl_lcy": round(lc_pnl_lcy, 2),
@@ -182,7 +207,10 @@ class ScenarioEngine:
                 "total_pnl_lcy": round(total_pnl_lcy, 2),
             })
 
-        df = pd.DataFrame(records)
+        df = pd.DataFrame(records, columns=[
+            "position_id", "commodity", "notional_usd", "unit", "pnl_per_unit_lcy",
+            "fx_pnl_lcy", "commodity_pnl_lcy", "lc_pnl_lcy", "tariff_pnl_lcy", "total_pnl_lcy",
+        ])
         total = df["total_pnl_lcy"].sum()
 
         attribution = {

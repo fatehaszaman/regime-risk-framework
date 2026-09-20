@@ -59,7 +59,7 @@ def position(pid="P1", notional=1_000_000.0, commodity="copper", settlement_fx=1
         position_id=pid,
         commodity=commodity,
         notional_usd=notional,
-        quantity=1000.0,
+        quantity=notional / 1000.0,
         unit="tonne",
         entry_price_usd=1000.0,
         lc_fee_pct=0.01,
