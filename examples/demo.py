@@ -6,6 +6,10 @@ End-to-end demonstration of the regime_risk framework.
 Simulates a 6-month window where a currency control regime gradually
 tightens, culminating in a policy discontinuity event, then shows
 how each module responds.
+
+All inputs are synthetic: settlement data, FX rates, positions, option
+terms and scenarios are generated or chosen for illustration and do not
+describe any real business or its trades.
 """
 
 import numpy as np
@@ -15,10 +19,12 @@ from regime_risk import (
     EffectiveFXCurveBuilder,
     LCPriorityAllocator,
     LCSettlement,
+    OptionPosition,
     PendingLC,
     Position,
     RegimeClassifier,
     ScenarioEngine,
+    ScenarioShock,
 )
 
 np.random.seed(42)
@@ -116,6 +122,23 @@ results = engine.run_all(positions)
 
 print(results[["scenario", "total_pnl_lcy", "fx_pnl_lcy", "commodity_pnl_lcy",
                "lc_pnl_lcy", "tariff_pnl_lcy"]].to_string(index=False))
+print()
+
+# Synthetic copper call position: 150 tonnes, at the money, six months.
+copper_call = OptionPosition("OPT-001", "copper", "call", quantity=150, strike_usd=8000,
+                       expiry_years=0.5, spot_usd=8000, vol=0.25, rate=0.05,
+                       settlement_fx=110.0)
+rally = ScenarioShock("Copper_Rally_Vol_Spike", "Copper +15%, vol +5 points, LCY/USD +5, 30 days",
+                      fx_shift=5.0, commodity_shocks={"copper": 0.15},
+                      vol_shifts={"copper": 0.05}, horizon_years=30 / 365)
+without_call = engine.run(positions, rally)
+with_call = engine.run([*positions, copper_call], rally)
+print(f"{rally.name}: without the call {without_call.total_pnl_lcy:,.0f} LCY, "
+      f"with the call {with_call.total_pnl_lcy:,.0f} LCY")
+print("Option P&L by Greek (LCY):")
+print(with_call.option_pnl[["fx_pnl_lcy", "delta_pnl_lcy", "gamma_pnl_lcy", "vega_pnl_lcy",
+                         "theta_pnl_lcy", "residual_pnl_lcy", "total_pnl_lcy"]]
+      .to_string(index=False))
 print()
 
 # ── 4. LC priority allocation ─────────────────────────────────────────────────

@@ -65,6 +65,30 @@ Applies parameterized shocks to a position book and returns P&L attribution by s
 
 Custom scenarios are straightforward to add via `ScenarioShock`.
 
+Greeks-based P&L attribution for option positions, with residual tests. An
+`OptionPosition` (a European call or put on a commodity, illustrated here with
+a synthetic copper call) is repriced with Black-Scholes under the scenario's
+commodity shock, implied-volatility shift (`vol_shifts`) and elapsed time
+(`horizon_years`). Its P&L is reported as:
+
+| Component | Formula |
+|---|---|
+| FX | option value before the shock x FX shift |
+| Delta | delta x dS |
+| Gamma | 1/2 x gamma x dS^2 |
+| Vega | vega x d_sigma |
+| Theta | theta x dt |
+| Residual | full revaluation minus the five terms above |
+
+Greek terms are converted to LCY at the shocked FX rate, so the components sum
+exactly to the full revaluation, and the book-level attribution still sums to
+the total. The residual holds the cross and higher-order terms the Greeks
+miss; tests check that it shrinks as the move shrinks. Pricing and Greeks are
+in `options.py` and are checked against textbook values, put-call parity and
+finite differences. Scope: European exercise, no dividends, constant rates,
+and a horizon shorter than expiry. `horizon_years` uses calendar time
+(days/365).
+
 ### `lc_priority.py` -- LC Priority Allocator
 
 When USD capacity is constrained, ranks pending LC requests and produces an allocation plan (approve / defer / cancel) using a configurable scoring model:
@@ -92,6 +116,7 @@ The demo simulates a 6-month tightening cycle. Official FX rates drift while rea
 │   ├── fx_curve.py           # Effective FX curve builder
 │   ├── regime_classifier.py  # Non-market regime classifier
 │   ├── scenario_engine.py    # Shock scenario engine
+│   ├── options.py            # Black-Scholes pricing, Greeks, attribution
 │   ├── lc_priority.py        # LC priority allocator
 │   └── __init__.py
 ├── tests/                    # Arithmetic and behavioral regression tests

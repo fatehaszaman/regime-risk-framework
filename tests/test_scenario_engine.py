@@ -5,7 +5,15 @@ expected LCY P&L by hand from the position and the shock.
 """
 import pytest
 
-from regime_risk import DEFAULT_SCENARIOS, Position, ScenarioEngine, ScenarioShock
+from regime_risk import (
+    DEFAULT_SCENARIOS,
+    OptionPosition,
+    Position,
+    ScenarioEngine,
+    ScenarioShock,
+    bs_greeks,
+    bs_price,
+)
 from tests.conftest import position
 
 BASE_FX = 110.0
@@ -194,3 +202,65 @@ def test_empty_book_has_zero_impact():
     r = engine().run([], ScenarioShock("empty", ""))
     assert r.total_pnl_lcy == 0
     assert r.position_pnl.empty
+
+
+# ------------------------------------------------------------ option positions
+
+def copper_call(quantity=100.0, **kw):
+    """At-the-money copper calls: 100 tonnes, strike 8,000, six months."""
+    args = dict(position_id="OPT1", underlying="copper", kind="call",
+                quantity=quantity, strike_usd=8_000.0, expiry_years=0.5,
+                spot_usd=8_000.0, vol=0.25, rate=0.05)
+    args.update(kw)
+    return OptionPosition(**args)
+
+
+def test_option_greeks_attribution_sums_to_the_book_total():
+    shock = ScenarioShock("mix", "", fx_shift=5.0, commodity_shocks={"copper": 0.15},
+                          vol_shifts={"copper": 0.05}, horizon_years=30 / 365)
+    r = engine().run([position(), copper_call()], shock)
+    row = r.option_pnl.iloc[0]
+    parts = ["fx_pnl_lcy", "delta_pnl_lcy", "gamma_pnl_lcy", "vega_pnl_lcy",
+             "theta_pnl_lcy", "residual_pnl_lcy"]
+    assert sum(row[c] for c in parts) == pytest.approx(row["total_pnl_lcy"], abs=1e-6)
+    v0 = 100 * bs_price(8_000.0, 8_000.0, 0.5, 0.05, 0.25, "call")
+    v1 = 100 * bs_price(9_200.0, 8_000.0, 0.5 - 30 / 365, 0.05, 0.30, "call")
+    exact = v1 * (BASE_FX + 5.0) - v0 * BASE_FX
+    assert row["total_pnl_lcy"] == pytest.approx(exact, abs=0.01)
+    assert sum(r.attribution.values()) == pytest.approx(r.total_pnl_lcy, abs=0.05)
+
+
+def test_long_call_delta_pnl_is_delta_times_the_spot_move_at_shocked_fx():
+    """Copper +15% moves spot from 8,000 to 9,200. Delta P&L in LCY is
+    quantity x delta x 1,200 x 110."""
+    r = engine().run([copper_call()], ScenarioShock(
+        "cu", "", commodity_shocks={"copper": 0.15}))
+    delta = bs_greeks(8_000.0, 8_000.0, 0.5, 0.05, 0.25, "call").delta
+    assert r.attribution["option_delta"] == pytest.approx(100 * delta * 1_200 * BASE_FX, abs=0.01)
+    assert r.attribution["option_gamma"] > 0
+    assert r.attribution["option_vega"] == 0.0
+    assert r.attribution["option_theta"] == 0.0
+
+
+def test_fx_only_shock_revalues_the_option_without_greek_pnl():
+    """A long option is a USD asset, so LCY +5 is a gain of value x 5."""
+    r = engine().run([copper_call()], ScenarioShock("fx", "", fx_shift=5.0))
+    v0 = 100 * bs_price(8_000.0, 8_000.0, 0.5, 0.05, 0.25, "call")
+    assert r.option_pnl.iloc[0]["fx_pnl_lcy"] == pytest.approx(v0 * 5.0, abs=0.01)
+    for key in ("delta", "gamma", "vega", "theta", "residual"):
+        assert r.attribution[f"option_{key}"] == 0.0
+
+
+def test_long_call_offsets_part_of_the_procurement_loss():
+    """Procurement rows are unchanged by adding the call; its gain reduces
+    the book's loss on a copper rally."""
+    shock = ScenarioShock("cu", "", commodity_shocks={"copper": 0.15})
+    without_call = engine().run([position()], shock)
+    with_call = engine().run([position(), copper_call()], shock)
+    assert with_call.position_pnl.equals(without_call.position_pnl)
+    assert without_call.total_pnl_lcy < with_call.total_pnl_lcy < 0
+
+
+def test_shock_that_makes_volatility_non_positive_is_rejected():
+    with pytest.raises(ValueError, match="volatility must be positive"):
+        engine().run([copper_call()], ScenarioShock("v", "", vol_shifts={"copper": -0.25}))

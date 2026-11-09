@@ -106,3 +106,51 @@ for every classification date.
 
 These notes document current behavior; they do not introduce an event-date
 index or change the policy-event semantics.
+
+## Greeks-based option P&L attribution
+
+Implementation: [`attribute`](../regime_risk/options.py) and
+[`ScenarioEngine._run_option`](../regime_risk/scenario_engine.py).
+
+```text
+# Greeks Attribution / Black-Scholes Revaluation
+# Goal: explain an option's scenario P&L by delta, gamma, vega and theta.
+# Input: one European option (S0, K, T, r, sigma0, kind, quantity) and a
+#        scenario (spot shock, vol shift, horizon dt, FX shift)
+# Output: FX, delta, gamma, vega, theta and residual P&L in LCY
+# Time: O(1) per option, so O(P) for P option positions
+# Memory: O(1) per option, O(P) for the result table
+
+S1 = S0 * (1 + spot_shock);  sigma1 = sigma0 + vol_shift
+V0 = quantity * BS(S0, K, T, r, sigma0)
+V1 = quantity * BS(S1, K, T - dt, r, sigma1)
+delta, gamma, vega, theta = BS_GREEKS(S0, K, T, r, sigma0)
+
+dS = S1 - S0
+delta_pnl = quantity * delta * dS
+gamma_pnl = quantity * 0.5 * gamma * dS^2
+vega_pnl  = quantity * vega * (sigma1 - sigma0)
+theta_pnl = quantity * theta * dt
+residual  = (V1 - V0) - (delta_pnl + gamma_pnl + vega_pnl + theta_pnl)
+
+fx_pnl_lcy = V0 * fx_shift                  # V0 is a USD asset
+each greek_pnl_lcy = greek_pnl * (F0 + fx_shift)
+RETURN fx_pnl_lcy, greek P&L in LCY, residual in LCY
+```
+
+The LCY split rests on an identity:
+`V1 * F1 - V0 * F0 = V0 * (F1 - F0) + (V1 - V0) * F1`. The first term is the
+FX P&L and the second is split by the Greeks, so the components always sum to
+the full revaluation. All Greeks are taken at the starting point, so the
+residual collects the cross terms (vanna, the delta-theta interaction) and the
+third-order spot term. For a spot-only move it is third order, and halving
+`dS` cuts it by about eight; the tests check this.
+
+Worked example (S=100, K=100, r=5%, sigma=20%, T=1, one call): value 10.4506,
+delta 0.6368, gamma 0.01876, vega 37.52 per 1.00 of vol, theta -6.414 per year.
+A move to S=104 and sigma=22% over 10 calendar days (dt = 10/365) gives delta
+P&L 2.547, gamma P&L 0.150, vega P&L 0.750 and theta P&L -0.176. Those four sum
+to 3.272 against a full revaluation of 3.222, leaving a residual of -0.050,
+about 1.6% of the P&L. Elapsed time is calendar time (days/365) throughout,
+matching `horizon_years` in the code; on a trading-day basis (10/252) theta
+P&L would be -0.255 and the full change 3.136.
