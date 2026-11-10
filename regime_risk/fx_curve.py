@@ -19,7 +19,7 @@ and risk scenario generation.
 This is especially relevant during:
   - Currency control regimes (USD rationing, LC caps)
   - Political transitions with FX policy discontinuities
-  - EM financial tightening cycles
+  - Emerging-market monetary policy shifts
 """
 
 from dataclasses import dataclass
