@@ -126,7 +126,8 @@ class EffectiveFXCurveBuilder:
         df = df.sort_values("date")
 
         # Volume-weighted average realized rate per date
-        grouped = df.groupby("date").apply(
+        value_cols = ["official_rate", "realized_rate", "weight"]
+        grouped = df.groupby("date")[value_cols].apply(
             lambda g: pd.Series({
                 "official_rate": g["official_rate"].mean(),
                 "effective_rate": np.average(g["realized_rate"], weights=g["weight"]),
