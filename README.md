@@ -172,7 +172,7 @@ Python 3.10+, pandas, numpy. Tests additionally need pytest and ruff
 ## Design Notes
 
 **Why rule-based instead of ML for the regime classifier?**
-In low-frequency, high-impact regime events there's rarely enough labeled training data for a supervised model. A well-specified rule-based classifier with calibrated weights is more interpretable, easier to audit, and more reliable under distribution shift -- which is precisely the condition you're trying to detect.
+In low-frequency, high-impact regime events there's rarely enough labeled training data for a supervised model. A well-specified rule-based classifier with illustrative, configurable weights is more interpretable, easier to audit, and more reliable under distribution shift -- which is precisely the condition you're trying to detect.
 
 **Why volume-weighted FX rates?**
 Larger LCs are more representative of the true market-clearing rate than smaller spot transactions. Volume-weighting prevents small, anomalous settlements from distorting the effective curve.
@@ -182,8 +182,8 @@ A linear program would maximize some objective (e.g. total notional allocated), 
 
 The cost of that choice is that allocation is greedy first-fit, so a large
 high-priority LC that does not fit is deferred while smaller ones behind it are
-funded, and the leftover capacity is not reported. See
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md) #11.
+funded. Unused capacity is reported as `unallocated_usd`, and each deferral
+states the remaining capacity. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) #11.
 
 ## Scope
 
